@@ -75,7 +75,6 @@ def load_bot_tokens():
     for token in raw.split(","):
         token = token.strip()
 
-        # Remove accidental quotes from Render
         if (
             len(token) >= 2
             and token[0] == token[-1]
@@ -101,16 +100,48 @@ OWNER_IDS = {
     1190844956395446397,
 }
 
-# Discord role whose members are allowed to use the bot.
-# This can be overridden in Render with OWNER_ROLE_ID.
-OWNER_ROLE_ID = int(
-    os.getenv(
-        "OWNER_ROLE_ID",
-        "1541084686934347806"
-    ).strip() or 1541084686934347806
-)
 
-# Every member with OWNER_ROLE_ID starts with this many credits.
+# ============================================================
+# OWNER ROLES
+# ============================================================
+
+# BOTH roles are treated as owner roles.
+OWNER_ROLE_IDS = {
+    1541084686934347806,
+    1541115360592265286,
+}
+
+
+# Optional Render override.
+#
+# Example:
+#
+# OWNER_ROLE_IDS=1541084686934347806,1541115360592265286
+#
+_raw_owner_role_ids = os.getenv(
+    "OWNER_ROLE_IDS",
+    ""
+).strip()
+
+if _raw_owner_role_ids:
+
+    try:
+
+        OWNER_ROLE_IDS = {
+            int(role_id.strip())
+            for role_id in _raw_owner_role_ids.split(",")
+            if role_id.strip()
+        }
+
+    except ValueError:
+
+        print(
+            "⚠️ Invalid OWNER_ROLE_IDS. "
+            "Using default owner role IDs."
+        )
+
+
+# Every member with an owner role starts with this many credits.
 DEFAULT_OWNER_CREDITS = 100
 
 
@@ -120,13 +151,10 @@ DEFAULT_OWNER_CREDITS = 100
 
 MAX_DAYS = 30
 
-# Default value shown in the UID modal.
 DEFAULT_DAYS = 30
 
-# Cost for adding a UID.
 ADD_UID_COST = 1
 
-# Removing UID is free.
 REMOVE_UID_COST = 0
 
 
@@ -152,20 +180,25 @@ db = {
 
 
 def load_database():
+
     global db
 
     if not DATA_FILE.exists():
+
         db = {
             "resellers": {},
             "owner_accounts": {}
         }
+
         return
 
     try:
+
         with DATA_FILE.open(
             "r",
             encoding="utf-8"
         ) as file:
+
             data = json.load(file)
 
         if not isinstance(data, dict):
@@ -175,12 +208,14 @@ def load_database():
             data.get("resellers"),
             dict
         ):
+
             data["resellers"] = {}
 
         if not isinstance(
             data.get("owner_accounts"),
             dict
         ):
+
             data["owner_accounts"] = {}
 
         db = data
@@ -191,6 +226,7 @@ def load_database():
         )
 
     except Exception as error:
+
         print(
             f"Database load error: {error}"
         )
@@ -205,11 +241,6 @@ load_database()
 
 
 def write_database_locked():
-    """
-    Atomic database write.
-
-    Caller must hold db_lock.
-    """
 
     temporary_file = DATA_FILE.with_suffix(
         ".tmp"
@@ -230,10 +261,13 @@ def write_database_locked():
         file.flush()
 
         try:
+
             os.fsync(
                 file.fileno()
             )
+
         except OSError:
+
             pass
 
     temporary_file.replace(
@@ -276,6 +310,7 @@ async def delete_reseller_record(
         )
 
         if old is not None:
+
             write_database_locked()
 
         return old
@@ -295,6 +330,7 @@ async def add_credits_record(
         )
 
         if not reseller:
+
             return None
 
         old_balance = int(
@@ -333,6 +369,7 @@ async def reserve_credit(
         )
 
         if not reseller:
+
             return None
 
         credits = int(
@@ -343,6 +380,7 @@ async def reserve_credit(
         )
 
         if credits < ADD_UID_COST:
+
             return None
 
         reseller[
@@ -371,6 +409,7 @@ async def refund_credit(
         )
 
         if not reseller:
+
             return None
 
         reseller[
@@ -397,33 +436,70 @@ async def ensure_owner_account(
     async with db_lock:
 
         key = str(user_id)
-        account = db["owner_accounts"].get(key)
+
+        account = db[
+            "owner_accounts"
+        ].get(key)
 
         if account is None:
-            db["owner_accounts"][key] = {
-                "username": username,
-                "credits": DEFAULT_OWNER_CREDITS,
-                "created_at": datetime.now(timezone.utc).isoformat()
+
+            db[
+                "owner_accounts"
+            ][key] = {
+
+                "username":
+                    username,
+
+                "credits":
+                    DEFAULT_OWNER_CREDITS,
+
+                "created_at":
+                    datetime.now(
+                        timezone.utc
+                    ).isoformat()
             }
+
             write_database_locked()
+
             return DEFAULT_OWNER_CREDITS
 
-        # Preserve an existing balance. Only fill missing fields.
         changed = False
+
         if "username" not in account:
+
             account["username"] = username
+
             changed = True
+
         if "credits" not in account:
-            account["credits"] = DEFAULT_OWNER_CREDITS
+
+            account["credits"] = (
+                DEFAULT_OWNER_CREDITS
+            )
+
             changed = True
+
         if changed:
+
             write_database_locked()
 
-        return int(account.get("credits", DEFAULT_OWNER_CREDITS))
+        return int(
+            account.get(
+                "credits",
+                DEFAULT_OWNER_CREDITS
+            )
+        )
 
 
-def get_owner_account(user_id):
-    return db["owner_accounts"].get(str(user_id))
+def get_owner_account(
+    user_id
+):
+
+    return db[
+        "owner_accounts"
+    ].get(
+        str(user_id)
+    )
 
 
 async def add_owner_credits_record(
@@ -435,91 +511,218 @@ async def add_owner_credits_record(
     async with db_lock:
 
         key = str(user_id)
-        account = db["owner_accounts"].get(key)
+
+        account = db[
+            "owner_accounts"
+        ].get(key)
 
         if account is None:
-            account = {
-                "username": username or str(user_id),
-                "credits": DEFAULT_OWNER_CREDITS,
-                "created_at": datetime.now(timezone.utc).isoformat()
-            }
-            db["owner_accounts"][key] = account
 
-        old_balance = int(account.get("credits", DEFAULT_OWNER_CREDITS))
-        new_balance = old_balance + amount
-        account["credits"] = new_balance
+            account = {
+
+                "username":
+                    username or str(user_id),
+
+                "credits":
+                    DEFAULT_OWNER_CREDITS,
+
+                "created_at":
+                    datetime.now(
+                        timezone.utc
+                    ).isoformat()
+            }
+
+            db[
+                "owner_accounts"
+            ][key] = account
+
+        old_balance = int(
+            account.get(
+                "credits",
+                DEFAULT_OWNER_CREDITS
+            )
+        )
+
+        new_balance = (
+            old_balance + amount
+        )
+
+        account[
+            "credits"
+        ] = new_balance
 
         if username:
-            account["username"] = username
+
+            account[
+                "username"
+            ] = username
 
         write_database_locked()
-        return old_balance, new_balance
+
+        return (
+            old_balance,
+            new_balance
+        )
 
 
-async def reserve_owner_credit(user_id):
+async def reserve_owner_credit(
+    user_id
+):
 
     async with db_lock:
 
-        account = db["owner_accounts"].get(str(user_id))
+        account = db[
+            "owner_accounts"
+        ].get(
+            str(user_id)
+        )
+
         if not account:
+
             return None
 
-        credits = int(account.get("credits", DEFAULT_OWNER_CREDITS))
+        credits = int(
+            account.get(
+                "credits",
+                DEFAULT_OWNER_CREDITS
+            )
+        )
+
         if credits < ADD_UID_COST:
+
             return None
 
-        account["credits"] = credits - ADD_UID_COST
+        account[
+            "credits"
+        ] = (
+            credits - ADD_UID_COST
+        )
+
         write_database_locked()
-        return account["credits"]
+
+        return account[
+            "credits"
+        ]
 
 
-async def refund_owner_credit(user_id):
+async def refund_owner_credit(
+    user_id
+):
 
     async with db_lock:
 
-        account = db["owner_accounts"].get(str(user_id))
+        account = db[
+            "owner_accounts"
+        ].get(
+            str(user_id)
+        )
+
         if not account:
+
             return None
 
-        account["credits"] = int(account.get("credits", 0)) + ADD_UID_COST
+        account[
+            "credits"
+        ] = int(
+            account.get(
+                "credits",
+                0
+            )
+        ) + ADD_UID_COST
+
         write_database_locked()
-        return account["credits"]
+
+        return account[
+            "credits"
+        ]
 
 
-def is_super_owner(user_id):
+# ============================================================
+# PERMISSION FUNCTIONS
+# ============================================================
+
+def is_super_owner(
+    user_id
+):
+
     return user_id in OWNER_IDS
 
 
-def member_has_owner_role(member):
+def member_has_owner_role(
+    member
+):
+
     if member is None:
+
         return False
-    return any(role.id == OWNER_ROLE_ID for role in getattr(member, "roles", []))
 
-
-def is_role_owner(user_id, guild=None, member=None):
-    if member is not None:
-        return member_has_owner_role(member)
-    if guild is None:
-        return False
-    found = guild.get_member(user_id)
-    return member_has_owner_role(found)
-
-
-def is_owner(user_id, guild=None, member=None):
-    return (
-        is_super_owner(user_id)
-        or
-        is_role_owner(user_id, guild=guild, member=member)
+    return any(
+        role.id in OWNER_ROLE_IDS
+        for role in getattr(
+            member,
+            "roles",
+            []
+        )
     )
 
 
-def is_reseller(user_id):
+def is_role_owner(
+    user_id,
+    guild=None,
+    member=None
+):
+
+    if member is not None:
+
+        return member_has_owner_role(
+            member
+        )
+
+    if guild is None:
+
+        return False
+
+    found = guild.get_member(
+        user_id
+    )
+
+    return member_has_owner_role(
+        found
+    )
+
+
+def is_owner(
+    user_id,
+    guild=None,
+    member=None
+):
+
+    return (
+        is_super_owner(user_id)
+        or
+        is_role_owner(
+            user_id,
+            guild=guild,
+            member=member
+        )
+    )
+
+
+def is_reseller(
+    user_id
+):
+
     return str(
         user_id
-    ) in db["resellers"]
+    ) in db[
+        "resellers"
+    ]
 
 
-def get_reseller(user_id):
+def get_reseller(
+    user_id
+):
+
     return db[
         "resellers"
     ].get(
@@ -548,12 +751,14 @@ def create_embed(
         description=description,
         color=(
             color
-            or discord.Color.blurple()
+            or
+            discord.Color.blurple()
         ),
         timestamp=discord.utils.utcnow()
     )
 
     if BOT_LOGO:
+
         embed.set_thumbnail(
             url=BOT_LOGO
         )
@@ -581,6 +786,7 @@ async def send_audit_log(
 ):
 
     if not LOG_CHANNEL_ID:
+
         return
 
     try:
@@ -726,7 +932,9 @@ class AddUIDModal(
     days_input = discord.ui.TextInput(
         label="Duration (1-30 Days)",
         placeholder="Maximum 30 days",
-        default=str(DEFAULT_DAYS),
+        default=str(
+            DEFAULT_DAYS
+        ),
         required=True,
         max_length=2
     )
@@ -746,15 +954,19 @@ class AddUIDModal(
         interaction
     ):
 
-        user_id = interaction.user.id
+        user_id = (
+            interaction.user.id
+        )
 
 
         # ----------------------------------------------------
         # ACCESS CHECK
         # ----------------------------------------------------
 
-        if (
-            not is_owner(user_id, interaction.guild, interaction.user)
+        if not is_owner(
+            user_id,
+            interaction.guild,
+            interaction.user
         ):
 
             await interaction.response.send_message(
@@ -1198,11 +1410,15 @@ class AddUIDView(
         button
     ):
 
-        user_id = interaction.user.id
+        user_id = (
+            interaction.user.id
+        )
 
 
-        if (
-            not is_owner(user_id, interaction.guild, interaction.user)
+        if not is_owner(
+            user_id,
+            interaction.guild,
+            interaction.user
         ):
 
             await interaction.response.send_message(
@@ -1223,6 +1439,7 @@ class AddUIDView(
                 user_id,
                 str(interaction.user)
             )
+
             reseller = get_owner_account(
                 user_id
             )
@@ -1286,7 +1503,6 @@ class GlobalXBot(
             f"#{bot_index + 1}"
         )
 
-        # Connection diagnostics.
         self.connection_started_at = None
         self.ready_count = 0
         self.last_gateway_error = None
@@ -1320,45 +1536,82 @@ def register_commands(
     @bot.event
     async def on_connect():
 
-        bot.connection_started_at = datetime.now(timezone.utc)
+        bot.connection_started_at = (
+            datetime.now(
+                timezone.utc
+            )
+        )
 
         print(
-            f"[{bot.bot_label}] 🔌 Connected to Discord Gateway."
+            f"[{bot.bot_label}] "
+            "🔌 Connected to Discord Gateway."
         )
+
 
     @bot.event
     async def on_disconnect():
 
         print(
-            f"[{bot.bot_label}] ⚠️ Disconnected from Discord Gateway."
+            f"[{bot.bot_label}] "
+            "⚠️ Disconnected from Discord Gateway."
         )
+
 
     @bot.event
     async def on_resumed():
 
         print(
-            f"[{bot.bot_label}] 🔄 Discord Gateway session resumed."
+            f"[{bot.bot_label}] "
+            "🔄 Discord Gateway session resumed."
         )
 
+
     @bot.event
-    async def on_error(event, *args, **kwargs):
+    async def on_error(
+        event,
+        *args,
+        **kwargs
+    ):
 
         print(
-            f"[{bot.bot_label}] ❌ Discord event error: {event}"
+            f"[{bot.bot_label}] "
+            f"❌ Discord event error: {event}"
         )
 
-    @bot.event
-    async def on_member_update(before, after):
 
-        before_has = member_has_owner_role(before)
-        after_has = member_has_owner_role(after)
+    @bot.event
+    async def on_member_update(
+        before,
+        after
+    ):
+
+        before_has = member_has_owner_role(
+            before
+        )
+
+        after_has = member_has_owner_role(
+            after
+        )
 
         if after_has:
-            await ensure_owner_account(after.id, str(after))
-        elif before_has and not after_has:
-            print(
-                f"[{bot.bot_label}] Owner role removed from {after} ({after.id})."
+
+            await ensure_owner_account(
+                after.id,
+                str(after)
             )
+
+        elif (
+            before_has
+            and
+            not after_has
+        ):
+
+            print(
+                f"[{bot.bot_label}] "
+                f"Owner role removed from "
+                f"{after} ({after.id})."
+            )
+
 
     # ========================================================
     # READY
@@ -1372,55 +1625,96 @@ def register_commands(
         print(
             "=" * 65
         )
+
         print(
-            f"[{bot.bot_label}] ✅ DISCORD BOT ONLINE"
-        )
-        print(
-            f"[{bot.bot_label}] User: {bot.user}"
-        )
-        print(
-            f"[{bot.bot_label}] User ID: {bot.user.id}"
-        )
-        print(
-            f"[{bot.bot_label}] Guilds connected: {len(bot.guilds)}"
-        )
-        print(
-            f"[{bot.bot_label}] Owner role ID: {OWNER_ROLE_ID}"
+            f"[{bot.bot_label}] "
+            "✅ DISCORD BOT ONLINE"
         )
 
-        # Initialize a 100-credit account for every current member
-        # holding the configured owner role. Existing balances are kept.
-        initialized = 0
-        for guild in bot.guilds:
-            role = guild.get_role(OWNER_ROLE_ID)
-            if role:
-                for member in role.members:
-                    await ensure_owner_account(member.id, str(member))
-                    initialized += 1
         print(
-            f"[{bot.bot_label}] Owner-role accounts initialized/checked: {initialized}"
+            f"[{bot.bot_label}] "
+            f"User: {bot.user}"
         )
+
+        print(
+            f"[{bot.bot_label}] "
+            f"User ID: {bot.user.id}"
+        )
+
+        print(
+            f"[{bot.bot_label}] "
+            f"Guilds connected: {len(bot.guilds)}"
+        )
+
+        print(
+            f"[{bot.bot_label}] "
+            "Owner role IDs: "
+            f"{', '.join(map(str, OWNER_ROLE_IDS))}"
+        )
+
+
+        # Initialize owner-role accounts for EVERY configured role.
+        initialized = 0
+
+        for guild in bot.guilds:
+
+            for role_id in OWNER_ROLE_IDS:
+
+                role = guild.get_role(
+                    role_id
+                )
+
+                if role:
+
+                    for member in role.members:
+
+                        await ensure_owner_account(
+                            member.id,
+                            str(member)
+                        )
+
+                        initialized += 1
+
+
+        print(
+            f"[{bot.bot_label}] "
+            "Owner-role accounts "
+            f"initialized/checked: {initialized}"
+        )
+
 
         if bot.guilds:
+
             print(
-                f"[{bot.bot_label}] Guild list: "
-                + ", ".join(
-                    f"{guild.name} ({guild.id})"
+                f"[{bot.bot_label}] "
+                "Guild list: "
+                +
+                ", ".join(
+                    f"{guild.name} "
+                    f"({guild.id})"
                     for guild in bot.guilds[:20]
                 )
             )
+
         else:
+
             print(
-                f"[{bot.bot_label}] ⚠️ Bot is online but "
+                f"[{bot.bot_label}] "
+                "⚠️ Bot is online but "
                 "is not connected to any guild."
             )
 
+
         print(
-            f"[{bot.bot_label}] Ready event count: {bot.ready_count}"
+            f"[{bot.bot_label}] "
+            f"Ready event count: "
+            f"{bot.ready_count}"
         )
+
         print(
             "=" * 65
         )
+
 
         try:
 
@@ -1512,7 +1806,8 @@ def register_commands(
                 (
                     f"⚠️ {member.mention} "
                     "is already a reseller.\n"
-                    f"Credits: `{reseller['credits']}`"
+                    f"Credits: "
+                    f"`{reseller['credits']}`"
                 )
             )
 
@@ -1641,16 +1936,21 @@ def register_commands(
             guild=ctx.guild,
             member=member
         ):
+
             result = await add_owner_credits_record(
                 member.id,
                 amount,
                 str(member)
             )
+
         else:
+
             await ctx.send(
                 "❌ That user does not have the configured owner role."
             )
+
             return
+
 
         if result is None:
 
@@ -1797,11 +2097,15 @@ def register_commands(
         ctx
     ):
 
-        user_id = ctx.author.id
+        user_id = (
+            ctx.author.id
+        )
 
 
-        if (
-            not is_owner(user_id, ctx.guild, ctx.author)
+        if not is_owner(
+            user_id,
+            ctx.guild,
+            ctx.author
         ):
 
             await ctx.send(
@@ -1862,12 +2166,20 @@ def register_commands(
         )
 
 
-        if is_role_owner(user_id, guild=ctx.guild, member=ctx.author):
+        if is_role_owner(
+            user_id,
+            guild=ctx.guild,
+            member=ctx.author
+        ):
+
+            owner_account = get_owner_account(
+                user_id
+            )
 
             embed.add_field(
                 name="💳 Your Credits",
                 value=(
-                    f"`{get_owner_account(user_id)['credits']}`"
+                    f"`{owner_account['credits']}`"
                 ),
                 inline=True
             )
@@ -1907,14 +2219,15 @@ def register_commands(
         uid: str = None
     ):
 
-        user_id = ctx.author.id
+        user_id = (
+            ctx.author.id
+        )
 
 
-        # IMPORTANT:
-        # SUPER OWNERS AND OWNER-ROLE MEMBERS CAN REMOVE UID.
-
-        if (
-            not is_owner(user_id, ctx.guild, ctx.author)
+        if not is_owner(
+            user_id,
+            ctx.guild,
+            ctx.author
         ):
 
             await ctx.send(
@@ -2132,10 +2445,14 @@ def register_commands(
         ctx
     ):
 
-        user_id = ctx.author.id
+        user_id = (
+            ctx.author.id
+        )
 
 
-        if is_super_owner(user_id):
+        if is_super_owner(
+            user_id
+        ):
 
             embed = create_embed(
                 "👑 Owner Account",
@@ -2245,7 +2562,9 @@ def register_commands(
             return
 
 
-        if not db["resellers"]:
+        if not db[
+            "resellers"
+        ]:
 
             await ctx.send(
                 "📭 No resellers registered."
@@ -2274,12 +2593,18 @@ def register_commands(
             embed.add_field(
                 name=(
                     f"👤 "
-                    f"{reseller.get('username', 'Unknown')}"
+                    f"{reseller.get(
+                        'username',
+                        'Unknown'
+                    )}"
                 ),
                 value=(
                     f"ID: `{user_id}`\n"
                     f"Credits: "
-                    f"`{reseller.get('credits', 0)}`"
+                    f"`{reseller.get(
+                        'credits',
+                        0
+                    )}`"
                 ),
                 inline=False
             )
@@ -2389,6 +2714,7 @@ def register_commands(
             error,
             commands.CommandNotFound
         ):
+
             return
 
 
@@ -2442,13 +2768,23 @@ flask_app = Flask(
 def home():
 
     return jsonify({
+
         "status": "online",
+
         "service": BOT_NAME,
-        "bots_configured": len(
-            BOT_TOKENS
-        ),
-        "max_uid_days": MAX_DAYS,
-        "default_uid_days": DEFAULT_DAYS,
+
+        "bots_configured":
+            len(BOT_TOKENS),
+
+        "owner_role_ids":
+            list(OWNER_ROLE_IDS),
+
+        "max_uid_days":
+            MAX_DAYS,
+
+        "default_uid_days":
+            DEFAULT_DAYS,
+
         "timestamp":
             datetime.now(
                 timezone.utc
@@ -2460,10 +2796,15 @@ def home():
 def health():
 
     return jsonify({
+
         "status": "healthy",
-        "bots_configured": len(
-            BOT_TOKENS
-        ),
+
+        "bots_configured":
+            len(BOT_TOKENS),
+
+        "owner_role_ids":
+            list(OWNER_ROLE_IDS),
+
         "timestamp":
             datetime.now(
                 timezone.utc
@@ -2501,67 +2842,106 @@ async def run_one_bot(
     token,
     index
 ):
-    """
-    Keep one bot alive with safe Discord reconnect/backoff handling.
 
-    IMPORTANT:
-    - HTTP 429 is NOT treated as a normal crash.
-    - We wait before trying again so Render does not immediately restart
-      the process and repeatedly hit Discord's global rate limit.
-    - Invalid tokens and missing privileged intents are treated as fatal.
-    """
+    bot_label = (
+        f"[Bot #{index + 1}]"
+    )
 
-    bot_label = f"[Bot #{index + 1}]"
-    token_length = len(token or "")
-    token_present = bool(token and token.strip())
+    token_length = len(
+        token or ""
+    )
+
+    token_present = bool(
+        token and token.strip()
+    )
+
 
     if not token_present:
+
         print(
-            f"{bot_label} ❌ EMPTY DISCORD TOKEN. "
+            f"{bot_label} "
+            "❌ EMPTY DISCORD TOKEN. "
             "Check BOT_TOKENS or BOT_TOKEN in Render."
         )
+
         return
 
-    # Safe exponential backoff for transient Discord/API failures.
-    # Start at 5 minutes after a 429 and cap at 30 minutes.
+
     rate_limit_backoff = 300
+
     gateway_backoff = 60
+
     attempt = 0
+
 
     while True:
 
         attempt += 1
 
-        # Create a fresh client for every connection attempt.
-        bot = GlobalXBot(index)
-        register_commands(bot)
 
-        print("=" * 65)
-        print(
-            f"{bot_label} Connection attempt #{attempt}"
+        bot = GlobalXBot(
+            index
         )
-        print(
-            f"{bot_label} Starting: {bot.bot_label}"
+
+        register_commands(
+            bot
         )
+
+
         print(
-            f"{bot_label} Token configured: {token_present}"
+            "=" * 65
         )
+
         print(
-            f"{bot_label} Token length: {token_length}"
+            f"{bot_label} "
+            f"Connection attempt #{attempt}"
         )
+
         print(
-            f"{bot_label} Server target: "
+            f"{bot_label} "
+            f"Starting: {bot.bot_label}"
+        )
+
+        print(
+            f"{bot_label} "
+            f"Token configured: {token_present}"
+        )
+
+        print(
+            f"{bot_label} "
+            f"Token length: {token_length}"
+        )
+
+        print(
+            f"{bot_label} "
+            "Server target: "
             f"{LOG_CHANNEL_ID and 'configured' or 'not configured'}"
         )
+
         print(
-            f"{bot_label} Intents: "
-            f"message_content={bot.intents.message_content}, "
-            f"members={bot.intents.members}"
+            f"{bot_label} "
+            "Intents: "
+            f"message_content="
+            f"{bot.intents.message_content}, "
+            f"members="
+            f"{bot.intents.members}"
         )
+
         print(
-            f"{bot_label} Connecting to Discord Gateway..."
+            f"{bot_label} "
+            "Owner role IDs: "
+            f"{', '.join(map(str, OWNER_ROLE_IDS))}"
         )
-        print("=" * 65)
+
+        print(
+            f"{bot_label} "
+            "Connecting to Discord Gateway..."
+        )
+
+        print(
+            "=" * 65
+        )
+
 
         try:
 
@@ -2570,54 +2950,75 @@ async def run_one_bot(
                 reconnect=True
             )
 
-            # If discord.py returns without raising, the connection was
-            # closed normally. Reconnect instead of allowing Render to
-            # restart the entire process.
+
             print(
-                f"{bot_label} ⚠️ Discord client returned normally."
+                f"{bot_label} "
+                "⚠️ Discord client returned normally."
             )
+
             print(
-                f"{bot_label} ⏳ Reconnecting in {gateway_backoff}s..."
+                f"{bot_label} "
+                f"⏳ Reconnecting in "
+                f"{gateway_backoff}s..."
             )
 
             await bot.close()
-            await asyncio.sleep(gateway_backoff)
+
+            await asyncio.sleep(
+                gateway_backoff
+            )
 
             gateway_backoff = min(
                 gateway_backoff * 2,
                 900
             )
 
+
         except discord.LoginFailure as error:
 
             print(
-                f"{bot_label} ❌ INVALID DISCORD TOKEN."
+                f"{bot_label} "
+                "❌ INVALID DISCORD TOKEN."
             )
+
             print(
-                f"{bot_label} LoginFailure: {error}"
+                f"{bot_label} "
+                f"LoginFailure: {error}"
             )
+
             print(
-                f"{bot_label} Fix BOT_TOKENS/BOT_TOKEN in Render."
+                f"{bot_label} "
+                "Fix BOT_TOKENS/BOT_TOKEN in Render."
             )
 
             await bot.close()
+
             return
+
 
         except discord.PrivilegedIntentsRequired as error:
 
             print(
-                f"{bot_label} ❌ PRIVILEGED INTENTS REQUIRED."
+                f"{bot_label} "
+                "❌ PRIVILEGED INTENTS REQUIRED."
             )
+
             print(
-                f"{bot_label} Error: {error}"
+                f"{bot_label} "
+                f"Error: {error}"
             )
+
             print(
-                f"{bot_label} Enable Message Content Intent "
-                "and Server Members Intent in Discord Developer Portal."
+                f"{bot_label} "
+                "Enable Message Content Intent "
+                "and Server Members Intent "
+                "in Discord Developer Portal."
             )
 
             await bot.close()
+
             return
+
 
         except discord.HTTPException as error:
 
@@ -2628,22 +3029,28 @@ async def run_one_bot(
             )
 
             print(
-                f"{bot_label} ❌ DISCORD HTTP ERROR."
-            )
-            print(
-                f"{bot_label} Status: {status}"
-            )
-            print(
-                f"{bot_label} Error: {error}"
+                f"{bot_label} "
+                "❌ DISCORD HTTP ERROR."
             )
 
-            # Discord's current response is a GLOBAL 429. Do not
-            # immediately exit or let Render restart the process.
+            print(
+                f"{bot_label} "
+                f"Status: {status}"
+            )
+
+            print(
+                f"{bot_label} "
+                f"Error: {error}"
+            )
+
+
             if status == 429:
 
                 retry_after = None
 
+
                 try:
+
                     headers = getattr(
                         error.response,
                         "headers",
@@ -2655,18 +3062,22 @@ async def run_one_bot(
                     )
 
                     if retry_after_header:
+
                         retry_after = float(
                             retry_after_header
                         )
 
                 except Exception:
+
                     retry_after = None
 
-                # Never hammer Discord after a global 429.
-                # Use Discord's Retry-After when available, but enforce
-                # a safe minimum and maximum.
+
                 if retry_after is None:
-                    retry_after = rate_limit_backoff
+
+                    retry_after = (
+                        rate_limit_backoff
+                    )
+
 
                 retry_after = max(
                     retry_after,
@@ -2678,28 +3089,39 @@ async def run_one_bot(
                     1800
                 )
 
+
                 print(
-                    f"{bot_label} 🚨 DISCORD GLOBAL RATE LIMIT (429)."
+                    f"{bot_label} "
+                    "🚨 DISCORD GLOBAL RATE LIMIT (429)."
                 )
+
                 print(
-                    f"{bot_label} ⚠️ This is a Discord-side API block, "
+                    f"{bot_label} "
+                    "⚠️ This is a Discord-side API block, "
                     "not a Render build error."
                 )
+
                 print(
-                    f"{bot_label} ⏳ Waiting "
-                    f"{int(retry_after)} seconds before retrying."
+                    f"{bot_label} "
+                    f"⏳ Waiting "
+                    f"{int(retry_after)} "
+                    "seconds before retrying."
                 )
+
                 print(
-                    f"{bot_label} ❗ Do NOT manually redeploy repeatedly "
+                    f"{bot_label} "
+                    "❗ Do NOT manually redeploy repeatedly "
                     "while this is active."
                 )
 
+
                 await bot.close()
+
                 await asyncio.sleep(
                     retry_after
                 )
 
-                # Increase future waits if the 429 continues.
+
                 rate_limit_backoff = min(
                     max(
                         rate_limit_backoff * 2,
@@ -2710,7 +3132,7 @@ async def run_one_bot(
 
                 continue
 
-            # Temporary Discord server-side errors.
+
             if status in (
                 500,
                 502,
@@ -2724,13 +3146,17 @@ async def run_one_bot(
                 )
 
                 print(
-                    f"{bot_label} ⚠️ Temporary Discord server error."
+                    f"{bot_label} "
+                    "⚠️ Temporary Discord server error."
                 )
+
                 print(
-                    f"{bot_label} ⏳ Retrying in {wait_time}s..."
+                    f"{bot_label} "
+                    f"⏳ Retrying in {wait_time}s..."
                 )
 
                 await bot.close()
+
                 await asyncio.sleep(
                     wait_time
                 )
@@ -2742,65 +3168,37 @@ async def run_one_bot(
 
                 continue
 
-            # Other HTTP errors should not be endlessly retried.
+
             print(
-                f"{bot_label} ❌ Non-retryable Discord HTTP error."
+                f"{bot_label} "
+                "❌ Non-retryable Discord HTTP error."
             )
 
             await bot.close()
+
             return
+
 
         except discord.GatewayNotFound as error:
 
             print(
-                f"{bot_label} ❌ DISCORD GATEWAY NOT FOUND."
+                f"{bot_label} "
+                "❌ DISCORD GATEWAY NOT FOUND."
             )
-            print(
-                f"{bot_label} Error: {error}"
-            )
-            print(
-                f"{bot_label} ⏳ Retrying in {gateway_backoff}s..."
-            )
-
-            await bot.close()
-            await asyncio.sleep(
-                gateway_backoff
-            )
-
-            gateway_backoff = min(
-                gateway_backoff * 2,
-                900
-            )
-
-            continue
-
-        except asyncio.CancelledError:
 
             print(
-                f"{bot_label} ⚠️ Bot task was cancelled."
+                f"{bot_label} "
+                f"Error: {error}"
             )
 
-            await bot.close()
-            raise
-
-        except Exception as error:
-
             print(
-                f"{bot_label} ❌ BOT CONNECTION ERROR."
-            )
-            print(
-                f"{bot_label} Error type: "
-                f"{type(error).__name__}"
-            )
-            print(
-                f"{bot_label} Error: {error}"
-            )
-            print(
-                f"{bot_label} ⏳ Retrying in "
+                f"{bot_label} "
+                f"⏳ Retrying in "
                 f"{gateway_backoff}s..."
             )
 
             await bot.close()
+
             await asyncio.sleep(
                 gateway_backoff
             )
@@ -2811,6 +3209,57 @@ async def run_one_bot(
             )
 
             continue
+
+
+        except asyncio.CancelledError:
+
+            print(
+                f"{bot_label} "
+                "⚠️ Bot task was cancelled."
+            )
+
+            await bot.close()
+
+            raise
+
+
+        except Exception as error:
+
+            print(
+                f"{bot_label} "
+                "❌ BOT CONNECTION ERROR."
+            )
+
+            print(
+                f"{bot_label} "
+                "Error type: "
+                f"{type(error).__name__}"
+            )
+
+            print(
+                f"{bot_label} "
+                f"Error: {error}"
+            )
+
+            print(
+                f"{bot_label} "
+                f"⏳ Retrying in "
+                f"{gateway_backoff}s..."
+            )
+
+            await bot.close()
+
+            await asyncio.sleep(
+                gateway_backoff
+            )
+
+            gateway_backoff = min(
+                gateway_backoff * 2,
+                900
+            )
+
+            continue
+
 
         finally:
 
@@ -2819,7 +3268,8 @@ async def run_one_bot(
                 await bot.close()
 
             print(
-                f"{bot_label} Discord client cleanup complete."
+                f"{bot_label} "
+                "Discord client cleanup complete."
             )
 
 
@@ -2829,7 +3279,9 @@ async def run_one_bot(
 
 async def main():
 
-    print("=" * 65)
+    print(
+        "=" * 65
+    )
 
     print(
         f"{BOT_NAME} - MULTI BOT HOST"
@@ -2846,11 +3298,13 @@ async def main():
     )
 
     print(
-        f"Owner role ID: {OWNER_ROLE_ID}"
+        "Owner role IDs: "
+        f"{', '.join(map(str, OWNER_ROLE_IDS))}"
     )
 
     print(
-        f"Default owner credits: {DEFAULT_OWNER_CREDITS}"
+        f"Default owner credits: "
+        f"{DEFAULT_OWNER_CREDITS}"
     )
 
     print(
@@ -2874,29 +3328,43 @@ async def main():
     )
 
     print(
-        f"BOT_TOKENS entries: {len(BOT_TOKENS)}"
+        f"BOT_TOKENS entries: "
+        f"{len(BOT_TOKENS)}"
     )
 
     print(
         "Discord token source: "
-        + (
+        +
+        (
             "BOT_TOKENS"
-            if os.getenv("BOT_TOKENS", "").strip()
-            else "BOT_TOKEN"
-            if os.getenv("BOT_TOKEN", "").strip()
-            else "NONE"
+            if os.getenv(
+                "BOT_TOKENS",
+                ""
+            ).strip()
+            else
+            "BOT_TOKEN"
+            if os.getenv(
+                "BOT_TOKEN",
+                ""
+            ).strip()
+            else
+            "NONE"
         )
     )
 
     print(
-        f"API key configured: {bool(API_KEY)}"
+        f"API key configured: "
+        f"{bool(API_KEY)}"
     )
 
     print(
-        f"Log channel ID: {LOG_CHANNEL_ID or 'DISABLED'}"
+        f"Log channel ID: "
+        f"{LOG_CHANNEL_ID or 'DISABLED'}"
     )
 
-    print("=" * 65)
+    print(
+        "=" * 65
+    )
 
 
     if not API_KEY:
@@ -2905,7 +3373,9 @@ async def main():
             "❌ API_KEY is not configured."
         )
 
-        raise SystemExit(1)
+        raise SystemExit(
+            1
+        )
 
 
     if not BOT_TOKENS:
@@ -2914,10 +3384,15 @@ async def main():
             "❌ BOT_TOKENS is not configured."
         )
 
-        raise SystemExit(1)
+        raise SystemExit(
+            1
+        )
 
 
-    # Start Render health server
+    # ========================================================
+    # START RENDER HEALTH SERVER
+    # ========================================================
+
     health_thread = threading.Thread(
         target=start_http_server,
         daemon=True
@@ -2926,21 +3401,29 @@ async def main():
     health_thread.start()
 
 
-    # Start all Discord bots
+    # ========================================================
+    # START ALL DISCORD BOTS
+    # ========================================================
+
     tasks = []
+
 
     print(
         "Discord Gateway requirements:"
     )
+
     print(
         "  - Message Content Intent: ENABLED in code"
     )
+
     print(
         "  - Server Members Intent: ENABLED in code"
     )
+
     print(
         "  - These must also be enabled in Discord Developer Portal."
     )
+
     print(
         "  - HTTP 429: bot will wait and retry instead of exiting."
     )
