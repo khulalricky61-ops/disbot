@@ -2501,42 +2501,19 @@ async def run_one_bot(
     token,
     index
 ):
+    """
+    Keep one bot alive with safe Discord reconnect/backoff handling.
 
-    bot = GlobalXBot(
-        index
-    )
-
-    register_commands(
-        bot
-    )
+    IMPORTANT:
+    - HTTP 429 is NOT treated as a normal crash.
+    - We wait before trying again so Render does not immediately restart
+      the process and repeatedly hit Discord's global rate limit.
+    - Invalid tokens and missing privileged intents are treated as fatal.
+    """
 
     bot_label = f"[Bot #{index + 1}]"
-
-    # Never print the token itself.
     token_length = len(token or "")
     token_present = bool(token and token.strip())
-
-    print(
-        f"{bot_label} Starting: {bot.bot_label}"
-    )
-    print(
-        f"{bot_label} Token configured: {token_present}"
-    )
-    print(
-        f"{bot_label} Token length: {token_length}"
-    )
-    print(
-        f"{bot_label} Server target: "
-        f"{LOG_CHANNEL_ID and 'configured' or 'not configured'}"
-    )
-    print(
-        f"{bot_label} Intents: "
-        f"message_content={bot.intents.message_content}, "
-        f"members={bot.intents.members}"
-    )
-    print(
-        f"{bot_label} Connecting to Discord Gateway..."
-    )
 
     if not token_present:
         print(
@@ -2545,96 +2522,305 @@ async def run_one_bot(
         )
         return
 
-    try:
+    # Safe exponential backoff for transient Discord/API failures.
+    # Start at 5 minutes after a 429 and cap at 30 minutes.
+    rate_limit_backoff = 300
+    gateway_backoff = 60
+    attempt = 0
 
-        await bot.start(
-            token,
-            reconnect=True
-        )
+    while True:
 
+        attempt += 1
+
+        # Create a fresh client for every connection attempt.
+        bot = GlobalXBot(index)
+        register_commands(bot)
+
+        print("=" * 65)
         print(
-            f"{bot_label} Discord connection closed normally."
-        )
-
-    except discord.LoginFailure as error:
-
-        print(
-            f"{bot_label} ❌ INVALID DISCORD TOKEN."
-        )
-        print(
-            f"{bot_label} LoginFailure: {error}"
-        )
-        print(
-            f"{bot_label} Generate a new bot token in "
-            "Discord Developer Portal and update Render."
-        )
-
-    except discord.PrivilegedIntentsRequired as error:
-
-        print(
-            f"{bot_label} ❌ PRIVILEGED INTENTS REQUIRED."
+            f"{bot_label} Connection attempt #{attempt}"
         )
         print(
-            f"{bot_label} Error: {error}"
+            f"{bot_label} Starting: {bot.bot_label}"
         )
         print(
-            f"{bot_label} Enable Message Content Intent "
-            "and Server Members Intent in Discord Developer Portal."
-        )
-
-    except discord.HTTPException as error:
-
-        print(
-            f"{bot_label} ❌ DISCORD HTTP ERROR."
+            f"{bot_label} Token configured: {token_present}"
         )
         print(
-            f"{bot_label} Status: {getattr(error, 'status', 'unknown')}"
+            f"{bot_label} Token length: {token_length}"
         )
         print(
-            f"{bot_label} Error: {error}"
-        )
-
-    except discord.GatewayNotFound as error:
-
-        print(
-            f"{bot_label} ❌ DISCORD GATEWAY NOT FOUND."
+            f"{bot_label} Server target: "
+            f"{LOG_CHANNEL_ID and 'configured' or 'not configured'}"
         )
         print(
-            f"{bot_label} Error: {error}"
-        )
-
-    except asyncio.CancelledError:
-
-        print(
-            f"{bot_label} ⚠️ Bot task was cancelled."
-        )
-        raise
-
-    except Exception as error:
-
-        print(
-            f"{bot_label} ❌ BOT STOPPED WITH UNEXPECTED ERROR."
+            f"{bot_label} Intents: "
+            f"message_content={bot.intents.message_content}, "
+            f"members={bot.intents.members}"
         )
         print(
-            f"{bot_label} Error type: {type(error).__name__}"
+            f"{bot_label} Connecting to Discord Gateway..."
         )
-        print(
-            f"{bot_label} Error: {error}"
-        )
+        print("=" * 65)
 
-    finally:
+        try:
 
-        print(
-            f"{bot_label} Cleaning up Discord client..."
-        )
+            await bot.start(
+                token,
+                reconnect=True
+            )
 
-        if not bot.is_closed():
+            # If discord.py returns without raising, the connection was
+            # closed normally. Reconnect instead of allowing Render to
+            # restart the entire process.
+            print(
+                f"{bot_label} ⚠️ Discord client returned normally."
+            )
+            print(
+                f"{bot_label} ⏳ Reconnecting in {gateway_backoff}s..."
+            )
 
             await bot.close()
+            await asyncio.sleep(gateway_backoff)
 
-        print(
-            f"{bot_label} Discord client closed."
-        )
+            gateway_backoff = min(
+                gateway_backoff * 2,
+                900
+            )
+
+        except discord.LoginFailure as error:
+
+            print(
+                f"{bot_label} ❌ INVALID DISCORD TOKEN."
+            )
+            print(
+                f"{bot_label} LoginFailure: {error}"
+            )
+            print(
+                f"{bot_label} Fix BOT_TOKENS/BOT_TOKEN in Render."
+            )
+
+            await bot.close()
+            return
+
+        except discord.PrivilegedIntentsRequired as error:
+
+            print(
+                f"{bot_label} ❌ PRIVILEGED INTENTS REQUIRED."
+            )
+            print(
+                f"{bot_label} Error: {error}"
+            )
+            print(
+                f"{bot_label} Enable Message Content Intent "
+                "and Server Members Intent in Discord Developer Portal."
+            )
+
+            await bot.close()
+            return
+
+        except discord.HTTPException as error:
+
+            status = getattr(
+                error,
+                "status",
+                None
+            )
+
+            print(
+                f"{bot_label} ❌ DISCORD HTTP ERROR."
+            )
+            print(
+                f"{bot_label} Status: {status}"
+            )
+            print(
+                f"{bot_label} Error: {error}"
+            )
+
+            # Discord's current response is a GLOBAL 429. Do not
+            # immediately exit or let Render restart the process.
+            if status == 429:
+
+                retry_after = None
+
+                try:
+                    headers = getattr(
+                        error.response,
+                        "headers",
+                        {}
+                    )
+
+                    retry_after_header = headers.get(
+                        "Retry-After"
+                    )
+
+                    if retry_after_header:
+                        retry_after = float(
+                            retry_after_header
+                        )
+
+                except Exception:
+                    retry_after = None
+
+                # Never hammer Discord after a global 429.
+                # Use Discord's Retry-After when available, but enforce
+                # a safe minimum and maximum.
+                if retry_after is None:
+                    retry_after = rate_limit_backoff
+
+                retry_after = max(
+                    retry_after,
+                    300
+                )
+
+                retry_after = min(
+                    retry_after,
+                    1800
+                )
+
+                print(
+                    f"{bot_label} 🚨 DISCORD GLOBAL RATE LIMIT (429)."
+                )
+                print(
+                    f"{bot_label} ⚠️ This is a Discord-side API block, "
+                    "not a Render build error."
+                )
+                print(
+                    f"{bot_label} ⏳ Waiting "
+                    f"{int(retry_after)} seconds before retrying."
+                )
+                print(
+                    f"{bot_label} ❗ Do NOT manually redeploy repeatedly "
+                    "while this is active."
+                )
+
+                await bot.close()
+                await asyncio.sleep(
+                    retry_after
+                )
+
+                # Increase future waits if the 429 continues.
+                rate_limit_backoff = min(
+                    max(
+                        rate_limit_backoff * 2,
+                        300
+                    ),
+                    1800
+                )
+
+                continue
+
+            # Temporary Discord server-side errors.
+            if status in (
+                500,
+                502,
+                503,
+                504
+            ):
+
+                wait_time = min(
+                    gateway_backoff,
+                    900
+                )
+
+                print(
+                    f"{bot_label} ⚠️ Temporary Discord server error."
+                )
+                print(
+                    f"{bot_label} ⏳ Retrying in {wait_time}s..."
+                )
+
+                await bot.close()
+                await asyncio.sleep(
+                    wait_time
+                )
+
+                gateway_backoff = min(
+                    gateway_backoff * 2,
+                    900
+                )
+
+                continue
+
+            # Other HTTP errors should not be endlessly retried.
+            print(
+                f"{bot_label} ❌ Non-retryable Discord HTTP error."
+            )
+
+            await bot.close()
+            return
+
+        except discord.GatewayNotFound as error:
+
+            print(
+                f"{bot_label} ❌ DISCORD GATEWAY NOT FOUND."
+            )
+            print(
+                f"{bot_label} Error: {error}"
+            )
+            print(
+                f"{bot_label} ⏳ Retrying in {gateway_backoff}s..."
+            )
+
+            await bot.close()
+            await asyncio.sleep(
+                gateway_backoff
+            )
+
+            gateway_backoff = min(
+                gateway_backoff * 2,
+                900
+            )
+
+            continue
+
+        except asyncio.CancelledError:
+
+            print(
+                f"{bot_label} ⚠️ Bot task was cancelled."
+            )
+
+            await bot.close()
+            raise
+
+        except Exception as error:
+
+            print(
+                f"{bot_label} ❌ BOT CONNECTION ERROR."
+            )
+            print(
+                f"{bot_label} Error type: "
+                f"{type(error).__name__}"
+            )
+            print(
+                f"{bot_label} Error: {error}"
+            )
+            print(
+                f"{bot_label} ⏳ Retrying in "
+                f"{gateway_backoff}s..."
+            )
+
+            await bot.close()
+            await asyncio.sleep(
+                gateway_backoff
+            )
+
+            gateway_backoff = min(
+                gateway_backoff * 2,
+                900
+            )
+
+            continue
+
+        finally:
+
+            if not bot.is_closed():
+
+                await bot.close()
+
+            print(
+                f"{bot_label} Discord client cleanup complete."
+            )
 
 
 # ============================================================
@@ -2754,6 +2940,9 @@ async def main():
     )
     print(
         "  - These must also be enabled in Discord Developer Portal."
+    )
+    print(
+        "  - HTTP 429: bot will wait and retry instead of exiting."
     )
 
 
