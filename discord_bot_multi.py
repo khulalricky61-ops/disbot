@@ -1,7 +1,6 @@
 import asyncio
 import json
 import os
-import signal
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -52,8 +51,6 @@ def load_bot_tokens():
 
     Also supports:
         BOT_TOKEN=TOKEN
-
-    Whitespace and accidental surrounding quotes are removed.
     """
 
     raw = os.getenv(
@@ -106,41 +103,17 @@ OWNER_IDS = {
 # OWNER ROLES
 # ============================================================
 
-# BOTH roles are treated as owner roles.
+# ALL of these roles are treated as owner roles.
+#
+# IMPORTANT:
+# These roles DO NOT have permission to use !removecredits.
+# !removecredits is ONLY available to OWNER_IDS above.
+
 OWNER_ROLE_IDS = {
     1541084686934347806,
     1541115360592265286,
     1540655225516326922,
 }
-
-
-# Optional Render override.
-#
-# Example:
-#
-# OWNER_ROLE_IDS=1541084686934347806,1541115360592265286
-#
-_raw_owner_role_ids = os.getenv(
-    "OWNER_ROLE_IDS",
-    ""
-).strip()
-
-if _raw_owner_role_ids:
-
-    try:
-
-        OWNER_ROLE_IDS = {
-            int(role_id.strip())
-            for role_id in _raw_owner_role_ids.split(",")
-            if role_id.strip()
-        }
-
-    except ValueError:
-
-        print(
-            "⚠️ Invalid OWNER_ROLE_IDS. "
-            "Using default owner role IDs."
-        )
 
 
 # Every member with an owner role starts with this many credits.
@@ -203,7 +176,11 @@ def load_database():
 
             data = json.load(file)
 
-        if not isinstance(data, dict):
+        if not isinstance(
+            data,
+            dict
+        ):
+
             data = {}
 
         if not isinstance(
@@ -277,6 +254,10 @@ def write_database_locked():
     )
 
 
+# ============================================================
+# RESELLER DATABASE
+# ============================================================
+
 async def add_reseller_record(
     user_id,
     username
@@ -287,8 +268,11 @@ async def add_reseller_record(
         db["resellers"][
             str(user_id)
         ] = {
+
             "username": username,
+
             "credits": 0,
+
             "created_at":
                 datetime.now(
                     timezone.utc
@@ -430,6 +414,10 @@ async def refund_credit(
         ]
 
 
+# ============================================================
+# OWNER ACCOUNT DATABASE
+# ============================================================
+
 async def ensure_owner_account(
     user_id,
     username
@@ -441,7 +429,9 @@ async def ensure_owner_account(
 
         account = db[
             "owner_accounts"
-        ].get(key)
+        ].get(
+            key
+        )
 
         if account is None:
 
@@ -469,15 +459,17 @@ async def ensure_owner_account(
 
         if "username" not in account:
 
-            account["username"] = username
+            account[
+                "username"
+            ] = username
 
             changed = True
 
         if "credits" not in account:
 
-            account["credits"] = (
-                DEFAULT_OWNER_CREDITS
-            )
+            account[
+                "credits"
+            ] = DEFAULT_OWNER_CREDITS
 
             changed = True
 
@@ -516,7 +508,9 @@ async def add_owner_credits_record(
 
         account = db[
             "owner_accounts"
-        ].get(key)
+        ].get(
+            key
+        )
 
         if account is None:
 
@@ -562,6 +556,62 @@ async def add_owner_credits_record(
         write_database_locked()
 
         return (
+            old_balance,
+            new_balance
+        )
+
+
+# ============================================================
+# REMOVE OWNER CREDITS
+# ============================================================
+
+async def remove_owner_credits_record(
+    user_id,
+    amount
+):
+
+    async with db_lock:
+
+        key = str(user_id)
+
+        account = db[
+            "owner_accounts"
+        ].get(
+            key
+        )
+
+        if account is None:
+
+            return None
+
+        old_balance = int(
+            account.get(
+                "credits",
+                0
+            )
+        )
+
+        # Never allow negative credits.
+        if amount > old_balance:
+
+            return (
+                False,
+                old_balance,
+                old_balance
+            )
+
+        new_balance = (
+            old_balance - amount
+        )
+
+        account[
+            "credits"
+        ] = new_balance
+
+        write_database_locked()
+
+        return (
+            True,
             old_balance,
             new_balance
         )
@@ -700,7 +750,9 @@ def is_owner(
 ):
 
     return (
-        is_super_owner(user_id)
+        is_super_owner(
+            user_id
+        )
         or
         is_role_owner(
             user_id,
@@ -956,10 +1008,7 @@ class AddUIDModal(
         interaction
     ):
 
-        user_id = (
-            interaction.user.id
-        )
-
+        user_id = interaction.user.id
 
         # ----------------------------------------------------
         # ACCESS CHECK
@@ -994,13 +1043,11 @@ class AddUIDModal(
 
             return
 
-
         is_role_owner_account = is_role_owner(
             user_id,
             guild=interaction.guild,
             member=interaction.user
         )
-
 
         # ----------------------------------------------------
         # INPUT
@@ -1015,7 +1062,6 @@ class AddUIDModal(
             self.username_input.value
             .strip()
         )
-
 
         try:
 
@@ -1032,7 +1078,6 @@ class AddUIDModal(
             )
 
             return
-
 
         # ----------------------------------------------------
         # MAX 30 DAYS
@@ -1054,13 +1099,11 @@ class AddUIDModal(
 
             return
 
-
         # ----------------------------------------------------
         # RESERVE CREDIT
         # ----------------------------------------------------
 
         reserved_remaining = None
-
 
         if is_role_owner_account:
 
@@ -1087,11 +1130,9 @@ class AddUIDModal(
 
                 return
 
-
         await interaction.response.defer(
             thinking=True
         )
-
 
         # ----------------------------------------------------
         # API REQUEST
@@ -1106,14 +1147,12 @@ class AddUIDModal(
                 days
             )
 
-
             success = bool(
                 data.get(
                     "success",
                     False
                 )
             )
-
 
             # ------------------------------------------------
             # FAILED = REFUND
@@ -1136,7 +1175,6 @@ class AddUIDModal(
                 remaining = (
                     reserved_remaining
                 )
-
 
             # ------------------------------------------------
             # SUCCESS
@@ -1186,7 +1224,6 @@ class AddUIDModal(
                     embed=embed
                 )
 
-
             # ------------------------------------------------
             # FAILURE
             # ------------------------------------------------
@@ -1235,7 +1272,6 @@ class AddUIDModal(
                 await interaction.followup.send(
                     embed=embed
                 )
-
 
             # ------------------------------------------------
             # AUDIT LOG
@@ -1307,7 +1343,6 @@ class AddUIDModal(
                 ]
             )
 
-
         except requests.RequestException as error:
 
             if is_role_owner_account:
@@ -1356,7 +1391,6 @@ class AddUIDModal(
                 ]
             )
 
-
         except Exception as error:
 
             if is_role_owner_account:
@@ -1400,7 +1434,6 @@ class AddUIDView(
 
         self.bot_ref = bot
 
-
     @discord.ui.button(
         label="🚀 Add UID",
         style=discord.ButtonStyle.success,
@@ -1412,10 +1445,7 @@ class AddUIDView(
         button
     ):
 
-        user_id = (
-            interaction.user.id
-        )
-
+        user_id = interaction.user.id
 
         if not is_owner(
             user_id,
@@ -1429,7 +1459,6 @@ class AddUIDView(
             )
 
             return
-
 
         if is_role_owner(
             user_id,
@@ -1464,7 +1493,6 @@ class AddUIDView(
 
                 return
 
-
         await interaction.response.send_modal(
             AddUIDModal(
                 self.bot_ref
@@ -1488,6 +1516,7 @@ class GlobalXBot(
         intents = discord.Intents.default()
 
         intents.message_content = True
+
         intents.members = True
 
         super().__init__(
@@ -1506,7 +1535,9 @@ class GlobalXBot(
         )
 
         self.connection_started_at = None
+
         self.ready_count = 0
+
         self.last_gateway_error = None
 
 
@@ -1529,7 +1560,6 @@ class GlobalXBot(
 def register_commands(
     bot
 ):
-
 
     # ========================================================
     # DISCORD CONNECTION DIAGNOSTICS
@@ -1650,12 +1680,9 @@ def register_commands(
 
         print(
             f"[{bot.bot_label}] "
-            "Owner role IDs: "
-            f"{', '.join(map(str, OWNER_ROLE_IDS))}"
+            f"Owner role IDs: {OWNER_ROLE_IDS}"
         )
 
-
-        # Initialize owner-role accounts for EVERY configured role.
         initialized = 0
 
         for guild in bot.guilds:
@@ -1677,23 +1704,19 @@ def register_commands(
 
                         initialized += 1
 
-
         print(
             f"[{bot.bot_label}] "
             "Owner-role accounts "
             f"initialized/checked: {initialized}"
         )
 
-
         if bot.guilds:
 
             print(
-                f"[{bot.bot_label}] "
-                "Guild list: "
+                f"[{bot.bot_label}] Guild list: "
                 +
                 ", ".join(
-                    f"{guild.name} "
-                    f"({guild.id})"
+                    f"{guild.name} ({guild.id})"
                     for guild in bot.guilds[:20]
                 )
             )
@@ -1706,27 +1729,21 @@ def register_commands(
                 "is not connected to any guild."
             )
 
-
         print(
             f"[{bot.bot_label}] "
-            f"Ready event count: "
-            f"{bot.ready_count}"
+            f"Ready event count: {bot.ready_count}"
         )
 
         print(
             "=" * 65
         )
 
-
         try:
 
             await bot.change_presence(
                 status=discord.Status.online,
                 activity=discord.Activity(
-                    type=(
-                        discord.ActivityType
-                        .watching
-                    ),
+                    type=discord.ActivityType.watching,
                     name="UID Management"
                 )
             )
@@ -1764,7 +1781,6 @@ def register_commands(
 
             return
 
-
         if member is None:
 
             await ctx.send(
@@ -1773,7 +1789,6 @@ def register_commands(
 
             return
 
-
         if member.bot:
 
             await ctx.send(
@@ -1781,7 +1796,6 @@ def register_commands(
             )
 
             return
-
 
         if is_owner(
             member.id,
@@ -1795,7 +1809,6 @@ def register_commands(
 
             return
 
-
         if is_reseller(
             member.id
         ):
@@ -1808,19 +1821,16 @@ def register_commands(
                 (
                     f"⚠️ {member.mention} "
                     "is already a reseller.\n"
-                    f"Credits: "
-                    f"`{reseller['credits']}`"
+                    f"Credits: `{reseller['credits']}`"
                 )
             )
 
             return
 
-
         await add_reseller_record(
             member.id,
             str(member)
         )
-
 
         embed = create_embed(
             "🎉 Reseller Added",
@@ -1852,7 +1862,6 @@ def register_commands(
         await ctx.send(
             embed=embed
         )
-
 
         await send_audit_log(
             bot,
@@ -1907,7 +1916,6 @@ def register_commands(
 
             return
 
-
         if (
             member is None
             or
@@ -1923,7 +1931,6 @@ def register_commands(
 
             return
 
-
         if amount <= 0:
 
             await ctx.send(
@@ -1931,7 +1938,6 @@ def register_commands(
             )
 
             return
-
 
         if is_role_owner(
             member.id,
@@ -1948,11 +1954,13 @@ def register_commands(
         else:
 
             await ctx.send(
-                "❌ That user does not have the configured owner role."
+                (
+                    "❌ That user does not have "
+                    "the configured owner role."
+                )
             )
 
             return
-
 
         if result is None:
 
@@ -1962,9 +1970,7 @@ def register_commands(
 
             return
 
-
         old_balance, new_balance = result
-
 
         embed = create_embed(
             "💳 Credits Added",
@@ -2002,6 +2008,264 @@ def register_commands(
 
 
     # ========================================================
+    # REMOVE CREDITS
+    # ========================================================
+    #
+    # IMPORTANT:
+    # ONLY OWNER_IDS CAN USE THIS COMMAND.
+    #
+    # OWNER_ROLE_IDS CANNOT USE THIS COMMAND.
+    #
+    # Usage:
+    # !removecredits @user 50
+    #
+    # ========================================================
+
+    @bot.command(
+        name="removecredits"
+    )
+    async def removecredits(
+        ctx,
+        member: discord.Member = None,
+        amount: int = None
+    ):
+
+        # ----------------------------------------------------
+        # STRICT OWNER-ONLY CHECK
+        # ----------------------------------------------------
+
+        if ctx.author.id not in OWNER_IDS:
+
+            await ctx.send(
+                (
+                    "🚫 **Access Denied**\n"
+                    "Only the configured owners can remove credits."
+                )
+            )
+
+            return
+
+        # ----------------------------------------------------
+        # ARGUMENT CHECK
+        # ----------------------------------------------------
+
+        if (
+            member is None
+            or
+            amount is None
+        ):
+
+            await ctx.send(
+                (
+                    "❌ Usage: "
+                    "`!removecredits @user 50`"
+                )
+            )
+
+            return
+
+        # ----------------------------------------------------
+        # AMOUNT CHECK
+        # ----------------------------------------------------
+
+        if amount <= 0:
+
+            await ctx.send(
+                "❌ Credit amount must be greater than zero."
+            )
+
+            return
+
+        # ----------------------------------------------------
+        # TARGET MUST HAVE OWNER ROLE
+        # ----------------------------------------------------
+
+        if not is_role_owner(
+            member.id,
+            guild=ctx.guild,
+            member=member
+        ):
+
+            await ctx.send(
+                (
+                    "❌ That user does not have "
+                    "the configured owner role."
+                )
+            )
+
+            return
+
+        # ----------------------------------------------------
+        # MAKE SURE ACCOUNT EXISTS
+        # ----------------------------------------------------
+
+        await ensure_owner_account(
+            member.id,
+            str(member)
+        )
+
+        account = get_owner_account(
+            member.id
+        )
+
+        if not account:
+
+            await ctx.send(
+                "❌ Could not find that owner's credit account."
+            )
+
+            return
+
+        current_balance = int(
+            account.get(
+                "credits",
+                0
+            )
+        )
+
+        # ----------------------------------------------------
+        # CHECK BALANCE
+        # ----------------------------------------------------
+
+        if amount > current_balance:
+
+            await ctx.send(
+                (
+                    "❌ **Insufficient Credits**\n"
+                    f"Current balance: `{current_balance}`\n"
+                    f"Requested removal: `{amount}`"
+                )
+            )
+
+            return
+
+        # ----------------------------------------------------
+        # REMOVE CREDITS
+        # ----------------------------------------------------
+
+        result = await remove_owner_credits_record(
+            member.id,
+            amount
+        )
+
+        if result is None:
+
+            await ctx.send(
+                "❌ Could not update that account."
+            )
+
+            return
+
+        success, old_balance, new_balance = result
+
+        if not success:
+
+            await ctx.send(
+                (
+                    "❌ The user does not have enough "
+                    "credits for this removal."
+                )
+            )
+
+            return
+
+        # ----------------------------------------------------
+        # SUCCESS EMBED
+        # ----------------------------------------------------
+
+        embed = create_embed(
+            "💳 Credits Removed",
+            (
+                "Credits have been successfully "
+                "removed from the owner account."
+            ),
+            discord.Color.orange()
+        )
+
+        embed.add_field(
+            name="👤 Account",
+            value=member.mention,
+            inline=False
+        )
+
+        embed.add_field(
+            name="➖ Removed",
+            value=f"`-{amount}`",
+            inline=True
+        )
+
+        embed.add_field(
+            name="📊 Previous",
+            value=f"`{old_balance}`",
+            inline=True
+        )
+
+        embed.add_field(
+            name="💰 New Balance",
+            value=f"`{new_balance}`",
+            inline=True
+        )
+
+        embed.add_field(
+            name="👑 Removed By",
+            value=ctx.author.mention,
+            inline=False
+        )
+
+        await ctx.send(
+            embed=embed
+        )
+
+        # ----------------------------------------------------
+        # AUDIT LOG
+        # ----------------------------------------------------
+
+        await send_audit_log(
+            bot,
+            "💳 Credits Removed",
+            color=discord.Color.orange(),
+            fields=[
+                (
+                    "👤 Account",
+                    (
+                        f"{member.mention}\n"
+                        f"`{member.id}`"
+                    ),
+                    False
+                ),
+                (
+                    "👑 Removed By",
+                    (
+                        f"{ctx.author.mention}\n"
+                        f"`{ctx.author.id}`"
+                    ),
+                    False
+                ),
+                (
+                    "➖ Removed",
+                    f"`-{amount}`",
+                    True
+                ),
+                (
+                    "📊 Previous Balance",
+                    f"`{old_balance}`",
+                    True
+                ),
+                (
+                    "💰 New Balance",
+                    f"`{new_balance}`",
+                    True
+                ),
+                (
+                    "Permission",
+                    "`OWNER_ID ONLY`",
+                    True
+                )
+            ]
+        )
+
+
+    # ========================================================
     # REMOVE RESELLER
     # ========================================================
 
@@ -2023,7 +2287,6 @@ def register_commands(
 
             return
 
-
         if member is None:
 
             await ctx.send(
@@ -2034,7 +2297,6 @@ def register_commands(
             )
 
             return
-
 
         reseller = get_reseller(
             member.id
@@ -2048,7 +2310,6 @@ def register_commands(
 
             return
 
-
         old_credits = int(
             reseller.get(
                 "credits",
@@ -2056,11 +2317,9 @@ def register_commands(
             )
         )
 
-
         await delete_reseller_record(
             member.id
         )
-
 
         embed = create_embed(
             "🗑️ Reseller Removed",
@@ -2099,10 +2358,7 @@ def register_commands(
         ctx
     ):
 
-        user_id = (
-            ctx.author.id
-        )
-
+        user_id = ctx.author.id
 
         if not is_owner(
             user_id,
@@ -2115,7 +2371,6 @@ def register_commands(
             )
 
             return
-
 
         if is_role_owner(
             user_id,
@@ -2149,7 +2404,6 @@ def register_commands(
 
                 return
 
-
         embed = create_embed(
             "🚀 UID Management Panel",
             (
@@ -2167,21 +2421,16 @@ def register_commands(
             discord.Color.blurple()
         )
 
-
         if is_role_owner(
             user_id,
             guild=ctx.guild,
             member=ctx.author
         ):
 
-            owner_account = get_owner_account(
-                user_id
-            )
-
             embed.add_field(
                 name="💳 Your Credits",
                 value=(
-                    f"`{owner_account['credits']}`"
+                    f"`{get_owner_account(user_id)['credits']}`"
                 ),
                 inline=True
             )
@@ -2199,7 +2448,6 @@ def register_commands(
                 value="`OWNER`",
                 inline=True
             )
-
 
         await ctx.send(
             embed=embed,
@@ -2221,10 +2469,7 @@ def register_commands(
         uid: str = None
     ):
 
-        user_id = (
-            ctx.author.id
-        )
-
+        user_id = ctx.author.id
 
         if not is_owner(
             user_id,
@@ -2241,7 +2486,6 @@ def register_commands(
 
             return
 
-
         if not uid:
 
             await ctx.send(
@@ -2250,11 +2494,9 @@ def register_commands(
 
             return
 
-
         await ctx.send(
             "⏳ Processing UID removal..."
         )
-
 
         try:
 
@@ -2263,14 +2505,12 @@ def register_commands(
                 uid
             )
 
-
             success = bool(
                 data.get(
                     "success",
                     False
                 )
             )
-
 
             message = (
                 data.get(
@@ -2281,7 +2521,6 @@ def register_commands(
                     "error"
                 )
             )
-
 
             if success:
 
@@ -2299,7 +2538,6 @@ def register_commands(
                     "the removal request."
                 )
 
-
             embed = create_embed(
                 (
                     "🗑️ UID Removed"
@@ -2315,7 +2553,6 @@ def register_commands(
                     discord.Color.red()
                 )
             )
-
 
             embed.add_field(
                 name="🎮 UID",
@@ -2335,11 +2572,9 @@ def register_commands(
                 inline=True
             )
 
-
             await ctx.send(
                 embed=embed
             )
-
 
             await send_audit_log(
                 bot,
@@ -2392,7 +2627,6 @@ def register_commands(
                 ]
             )
 
-
         except requests.RequestException as error:
 
             await ctx.send(
@@ -2422,7 +2656,6 @@ def register_commands(
                 ]
             )
 
-
         except Exception as error:
 
             print(
@@ -2447,10 +2680,7 @@ def register_commands(
         ctx
     ):
 
-        user_id = (
-            ctx.author.id
-        )
-
+        user_id = ctx.author.id
 
         if is_super_owner(
             user_id
@@ -2477,7 +2707,6 @@ def register_commands(
 
             return
 
-
         if not is_role_owner(
             user_id,
             guild=ctx.guild,
@@ -2490,7 +2719,6 @@ def register_commands(
 
             return
 
-
         await ensure_owner_account(
             user_id,
             str(ctx.author)
@@ -2499,7 +2727,6 @@ def register_commands(
         reseller = get_owner_account(
             user_id
         )
-
 
         embed = create_embed(
             "👑 Your Owner Account",
@@ -2563,7 +2790,6 @@ def register_commands(
 
             return
 
-
         if not db[
             "resellers"
         ]:
@@ -2574,7 +2800,6 @@ def register_commands(
 
             return
 
-
         embed = create_embed(
             "👥 Reseller Management",
             (
@@ -2583,7 +2808,6 @@ def register_commands(
             ),
             discord.Color.blurple()
         )
-
 
         for (
             user_id,
@@ -2595,22 +2819,15 @@ def register_commands(
             embed.add_field(
                 name=(
                     f"👤 "
-                    f"{reseller.get(
-                        'username',
-                        'Unknown'
-                    )}"
+                    f"{reseller.get('username', 'Unknown')}"
                 ),
                 value=(
                     f"ID: `{user_id}`\n"
                     f"Credits: "
-                    f"`{reseller.get(
-                        'credits',
-                        0
-                    )}`"
+                    f"`{reseller.get('credits', 0)}`"
                 ),
                 inline=False
             )
-
 
         await ctx.send(
             embed=embed
@@ -2634,6 +2851,9 @@ def register_commands(
             discord.Color.blurple()
         )
 
+        # ----------------------------------------------------
+        # SUPER OWNER
+        # ----------------------------------------------------
 
         if is_super_owner(
             ctx.author.id
@@ -2644,6 +2864,7 @@ def register_commands(
                 value=(
                     "`!addreseller @user`\n"
                     "`!addcredits @user 50`\n"
+                    "`!removecredits @user 50`\n"
                     "`!removereseller @user`\n"
                     "`!resellers`\n"
                     "`!adduid`\n"
@@ -2653,6 +2874,20 @@ def register_commands(
                 inline=False
             )
 
+            embed.add_field(
+                name="💳 CREDIT MANAGEMENT",
+                value=(
+                    "➕ `!addcredits @user amount`\n"
+                    "➖ `!removecredits @user amount`\n\n"
+                    "⚠️ `!removecredits` is restricted "
+                    "to the 3 configured Owner IDs only."
+                ),
+                inline=False
+            )
+
+        # ----------------------------------------------------
+        # OWNER ROLE
+        # ----------------------------------------------------
 
         elif is_role_owner(
             ctx.author.id,
@@ -2684,6 +2919,20 @@ def register_commands(
                 inline=False
             )
 
+            embed.add_field(
+                name="🔒 CREDIT MANAGEMENT",
+                value=(
+                    "You cannot use "
+                    "`!removecredits`.\n"
+                    "Only the configured Owner IDs "
+                    "can remove credits."
+                ),
+                inline=False
+            )
+
+        # ----------------------------------------------------
+        # NO ACCESS
+        # ----------------------------------------------------
 
         else:
 
@@ -2695,7 +2944,6 @@ def register_commands(
                 ),
                 inline=False
             )
-
 
         await ctx.send(
             embed=embed
@@ -2719,7 +2967,6 @@ def register_commands(
 
             return
 
-
         if isinstance(
             error,
             commands.MissingRequiredArgument
@@ -2733,7 +2980,6 @@ def register_commands(
             )
 
             return
-
 
         if isinstance(
             error,
@@ -2749,7 +2995,6 @@ def register_commands(
             )
 
             return
-
 
         print(
             f"[{bot.bot_label}] "
@@ -2770,23 +3015,13 @@ flask_app = Flask(
 def home():
 
     return jsonify({
-
         "status": "online",
-
         "service": BOT_NAME,
-
-        "bots_configured":
-            len(BOT_TOKENS),
-
-        "owner_role_ids":
-            list(OWNER_ROLE_IDS),
-
-        "max_uid_days":
-            MAX_DAYS,
-
-        "default_uid_days":
-            DEFAULT_DAYS,
-
+        "bots_configured": len(
+            BOT_TOKENS
+        ),
+        "max_uid_days": MAX_DAYS,
+        "default_uid_days": DEFAULT_DAYS,
         "timestamp":
             datetime.now(
                 timezone.utc
@@ -2798,15 +3033,10 @@ def home():
 def health():
 
     return jsonify({
-
         "status": "healthy",
-
-        "bots_configured":
-            len(BOT_TOKENS),
-
-        "owner_role_ids":
-            list(OWNER_ROLE_IDS),
-
+        "bots_configured": len(
+            BOT_TOKENS
+        ),
         "timestamp":
             datetime.now(
                 timezone.utc
@@ -2857,7 +3087,6 @@ async def run_one_bot(
         token and token.strip()
     )
 
-
     if not token_present:
 
         print(
@@ -2868,18 +3097,15 @@ async def run_one_bot(
 
         return
 
-
     rate_limit_backoff = 300
 
     gateway_backoff = 60
 
     attempt = 0
 
-
     while True:
 
         attempt += 1
-
 
         bot = GlobalXBot(
             index
@@ -2888,7 +3114,6 @@ async def run_one_bot(
         register_commands(
             bot
         )
-
 
         print(
             "=" * 65
@@ -2921,18 +3146,9 @@ async def run_one_bot(
         )
 
         print(
-            f"{bot_label} "
-            "Intents: "
-            f"message_content="
-            f"{bot.intents.message_content}, "
-            f"members="
-            f"{bot.intents.members}"
-        )
-
-        print(
-            f"{bot_label} "
-            "Owner role IDs: "
-            f"{', '.join(map(str, OWNER_ROLE_IDS))}"
+            f"{bot_label} Intents: "
+            f"message_content={bot.intents.message_content}, "
+            f"members={bot.intents.members}"
         )
 
         print(
@@ -2944,14 +3160,12 @@ async def run_one_bot(
             "=" * 65
         )
 
-
         try:
 
             await bot.start(
                 token,
                 reconnect=True
             )
-
 
             print(
                 f"{bot_label} "
@@ -2975,7 +3189,6 @@ async def run_one_bot(
                 900
             )
 
-
         except discord.LoginFailure as error:
 
             print(
@@ -2996,7 +3209,6 @@ async def run_one_bot(
             await bot.close()
 
             return
-
 
         except discord.PrivilegedIntentsRequired as error:
 
@@ -3021,7 +3233,6 @@ async def run_one_bot(
 
             return
 
-
         except discord.HTTPException as error:
 
             status = getattr(
@@ -3045,11 +3256,9 @@ async def run_one_bot(
                 f"Error: {error}"
             )
 
-
             if status == 429:
 
                 retry_after = None
-
 
                 try:
 
@@ -3073,13 +3282,11 @@ async def run_one_bot(
 
                     retry_after = None
 
-
                 if retry_after is None:
 
                     retry_after = (
                         rate_limit_backoff
                     )
-
 
                 retry_after = max(
                     retry_after,
@@ -3090,7 +3297,6 @@ async def run_one_bot(
                     retry_after,
                     1800
                 )
-
 
                 print(
                     f"{bot_label} "
@@ -3105,8 +3311,7 @@ async def run_one_bot(
 
                 print(
                     f"{bot_label} "
-                    f"⏳ Waiting "
-                    f"{int(retry_after)} "
+                    f"⏳ Waiting {int(retry_after)} "
                     "seconds before retrying."
                 )
 
@@ -3116,13 +3321,11 @@ async def run_one_bot(
                     "while this is active."
                 )
 
-
                 await bot.close()
 
                 await asyncio.sleep(
                     retry_after
                 )
-
 
                 rate_limit_backoff = min(
                     max(
@@ -3133,7 +3336,6 @@ async def run_one_bot(
                 )
 
                 continue
-
 
             if status in (
                 500,
@@ -3170,7 +3372,6 @@ async def run_one_bot(
 
                 continue
 
-
             print(
                 f"{bot_label} "
                 "❌ Non-retryable Discord HTTP error."
@@ -3179,7 +3380,6 @@ async def run_one_bot(
             await bot.close()
 
             return
-
 
         except discord.GatewayNotFound as error:
 
@@ -3195,8 +3395,7 @@ async def run_one_bot(
 
             print(
                 f"{bot_label} "
-                f"⏳ Retrying in "
-                f"{gateway_backoff}s..."
+                f"⏳ Retrying in {gateway_backoff}s..."
             )
 
             await bot.close()
@@ -3212,7 +3411,6 @@ async def run_one_bot(
 
             continue
 
-
         except asyncio.CancelledError:
 
             print(
@@ -3224,7 +3422,6 @@ async def run_one_bot(
 
             raise
 
-
         except Exception as error:
 
             print(
@@ -3234,7 +3431,7 @@ async def run_one_bot(
 
             print(
                 f"{bot_label} "
-                "Error type: "
+                f"Error type: "
                 f"{type(error).__name__}"
             )
 
@@ -3261,7 +3458,6 @@ async def run_one_bot(
             )
 
             continue
-
 
         finally:
 
@@ -3300,7 +3496,7 @@ async def main():
     )
 
     print(
-        "Owner role IDs: "
+        f"Owner role IDs: "
         f"{', '.join(map(str, OWNER_ROLE_IDS))}"
     )
 
@@ -3368,17 +3564,13 @@ async def main():
         "=" * 65
     )
 
-
     if not API_KEY:
 
         print(
             "❌ API_KEY is not configured."
         )
 
-        raise SystemExit(
-            1
-        )
-
+        raise SystemExit(1)
 
     if not BOT_TOKENS:
 
@@ -3386,14 +3578,11 @@ async def main():
             "❌ BOT_TOKENS is not configured."
         )
 
-        raise SystemExit(
-            1
-        )
+        raise SystemExit(1)
 
-
-    # ========================================================
+    # --------------------------------------------------------
     # START RENDER HEALTH SERVER
-    # ========================================================
+    # --------------------------------------------------------
 
     health_thread = threading.Thread(
         target=start_http_server,
@@ -3402,13 +3591,11 @@ async def main():
 
     health_thread.start()
 
-
-    # ========================================================
+    # --------------------------------------------------------
     # START ALL DISCORD BOTS
-    # ========================================================
+    # --------------------------------------------------------
 
     tasks = []
-
 
     print(
         "Discord Gateway requirements:"
@@ -3423,13 +3610,14 @@ async def main():
     )
 
     print(
-        "  - These must also be enabled in Discord Developer Portal."
+        "  - These must also be enabled "
+        "in Discord Developer Portal."
     )
 
     print(
-        "  - HTTP 429: bot will wait and retry instead of exiting."
+        "  - HTTP 429: bot will wait and retry "
+        "instead of exiting."
     )
-
 
     for (
         index,
@@ -3447,12 +3635,10 @@ async def main():
             )
         )
 
-
     results = await asyncio.gather(
         *tasks,
         return_exceptions=True
     )
-
 
     for (
         index,
